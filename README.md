@@ -20,7 +20,7 @@ Elle consomme l'**API REST Laravel** de l'application web ELYON Consulting, séc
 |---|---|
 | GitHub Mobile | https://github.com/Mfina-javerichalle/Elyon_consulting_mobile |
 | GitHub Web (API) | https://github.com/Mfina-javerichalle/Eyon_consulting_web |
-| Site en production | https://elyon-consulting.com |
+| lien APK | https://expo.dev/accounts/mfinajaverichalle/projects/elyon-consulting-mobile/builds/21267015-ab01-4041-a67d-edb4f2916d00 |
 | Documentation (Drive) | https://drive.google.com/drive/folders/1mnPxuYiy0xx9JAFyeN8Uq5jQe4GHWYnS |
 
 ---
