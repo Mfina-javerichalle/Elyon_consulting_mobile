@@ -3,11 +3,21 @@
 //
 // Liste des conversations (une par dossier)
 //
-// NOUVEAUTÉS :
-//   - À l'ouverture de l'écran, réinitialise le badge de
-//     l'onglet en appelant resetUnreadCount() passé depuis
-//     AppNavigator via les props de la Stack.
-//   - Icônes Ionicons — plus d'emojis dans l'UI
+// CORRECTION APPORTÉE :
+//
+//   BADGE NON LUS — CORRIGÉ
+//   Problème : navigation.getParent()?.resetUnreadCount()
+//   ne fonctionnait pas car l'objet navigation parent (Stack)
+//   n'expose pas de méthodes personnalisées via getParent().
+//
+//   Solution : resetUnreadCount est maintenant récupérée
+//   depuis route.params (passée depuis AppNavigator via
+//   initialParams dans MessagerieStack).
+//
+//   Comment ça marche :
+//     1. AppNavigator passe resetUnreadCount → MessagerieStack
+//     2. MessagerieStack la met dans initialParams de cet écran
+//     3. Ici on la lit avec : route.params?.resetUnreadCount
 // ============================================================
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -26,6 +36,10 @@ const MessagerieScreen = ({ navigation, route }) => {
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // ✅ CORRECTION : récupérer resetUnreadCount depuis route.params
+  // (transmis par MessagerieStack via initialParams)
+  const resetUnreadCount = route.params?.resetUnreadCount;
+
   // ── Chargement initial ───────────────────────────────────
   useEffect(() => { loadDossiers(); }, []);
 
@@ -35,13 +49,13 @@ const MessagerieScreen = ({ navigation, route }) => {
     useCallback(() => {
       loadDossiers();
 
-      // Réinitialiser le badge dans AppNavigator
-      // resetUnreadCount est passé en prop depuis MainTabs
-      const parent = navigation.getParent();
-      if (parent?.resetUnreadCount) {
-        parent.resetUnreadCount();
+      // ✅ CORRECTION : appel direct depuis route.params
+      // Avant : navigation.getParent()?.resetUnreadCount() → ne fonctionnait pas
+      // Après : resetUnreadCount?.() → fonctionne car c'est une vraie fonction passée en param
+      if (typeof resetUnreadCount === 'function') {
+        resetUnreadCount();
       }
-    }, [navigation])
+    }, [navigation, resetUnreadCount])
   );
 
   const loadDossiers = async () => {
@@ -66,8 +80,12 @@ const MessagerieScreen = ({ navigation, route }) => {
     <TouchableOpacity
       style={styles.card}
       onPress={() => navigation.navigate('MessageDetail', {
-        dossierId:  item.id,
-        dossierNom: item.service?.nom,
+        dossierId:          item.id,
+        dossierNom:         item.service?.nom,
+        // ✅ On transmet aussi resetUnreadCount à MessageDetailScreen
+        // pour que l'ouverture d'un message réinitialise aussi le badge
+        resetUnreadCount:   resetUnreadCount,
+        fetchUnreadCount:   route.params?.fetchUnreadCount,
       })}
       activeOpacity={0.8}
     >

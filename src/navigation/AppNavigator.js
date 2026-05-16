@@ -3,32 +3,38 @@
 //
 // Navigation principale de l'application Elyon Consulting
 //
-// NOUVEAUTÉS :
+// CORRECTIONS APPORTÉES :
 //
-//   1. ICÔNES PROFESSIONNELLES — Ionicons sur chaque onglet
-//      avec état actif / inactif distinct.
+//   1. BADGE MESSAGES NON LUS — CORRIGÉ
+//      Problème : resetUnreadCount / fetchUnreadCount n'étaient
+//      pas accessibles depuis les écrans enfants car la Stack
+//      ne transmettait pas ces fonctions via les screenOptions.
+//      Solution : Les fonctions sont exposées sur l'objet de
+//      navigation parent via setParams() sur le Tab Navigator,
+//      ce qui permet à tout écran enfant de les récupérer avec
+//      navigation.getParent().
 //
-//   2. BADGE MESSAGES NON LUS
-//      - Polling toutes les 30s via getUnreadCount()
-//      - Badge rouge avec chiffre si >= 1 message non lu
-//      - Point animé pulsant si >= 1 non lu (attire l'œil)
-//      - Disparaît automatiquement quand tout est lu
+//   2. SAFE AREA (barre de navigation Android/iOS) — CORRIGÉ
+//      Problème : hauteur fixe à 65px sans tenir compte de la
+//      barre système en bas (safe area inset).
+//      Solution : useSafeAreaInsets() ajuste dynamiquement le
+//      paddingBottom selon l'appareil, ce qui évite que la tab
+//      bar soit partiellement cachée par la navigation du tél.
 //
-//   3. TAB BAR DESIGN AMÉLIORÉ
-//      - Fond blanc propre avec ombre subtile
-//      - Icône active avec fond coloré (pill)
-//      - Label visible et lisible
+//   3. TAB BAR DESIGN AMÉLIORÉ — conservé
+//      Fond blanc, ombre subtile, icône active avec fond pill.
 // ============================================================
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, StyleSheet, Animated,
-  ActivityIndicator,
+  View, Text, StyleSheet, Animated, ActivityIndicator,
 } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+// ✅ CORRECTION 2 : import de useSafeAreaInsets pour gérer la safe area
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../services/AuthContext';
 import { getUnreadCount } from '../services/api';
@@ -90,12 +96,25 @@ const DossiersStack = () => (
   </Stack.Navigator>
 );
 
-const MessagerieStack = () => (
+// ✅ CORRECTION 1 : MessagerieStack reçoit resetUnreadCount et
+// fetchUnreadCount en props et les passe en initialParams aux écrans.
+// Ainsi, navigation.getParent() dans les écrans enfants peut
+// appeler ces fonctions via navigation.getState() / route.params.
+const MessagerieStack = ({ resetUnreadCount, fetchUnreadCount }) => (
   <Stack.Navigator screenOptions={headerOptions}>
-    <Stack.Screen name="MessagerieList" component={MessagerieScreen}
-      options={{ title: 'Messagerie' }} />
-    <Stack.Screen name="MessageDetail"  component={MessageDetailScreen}
-      options={{ title: 'Conversation' }} />
+    <Stack.Screen
+      name="MessagerieList"
+      component={MessagerieScreen}
+      options={{ title: 'Messagerie' }}
+      // ✅ On passe les fonctions comme paramètres de route
+      initialParams={{ resetUnreadCount, fetchUnreadCount }}
+    />
+    <Stack.Screen
+      name="MessageDetail"
+      component={MessageDetailScreen}
+      options={{ title: 'Conversation' }}
+      initialParams={{ resetUnreadCount, fetchUnreadCount }}
+    />
   </Stack.Navigator>
 );
 
@@ -108,7 +127,6 @@ const MessagerieStack = () => (
 //   - Un point animé pulsant quand il y a des non lus
 // ─────────────────────────────────────────────────────────────
 const TabIcon = ({ name, nameOutline, focused, color, unreadCount = 0 }) => {
-  // Animation de pulsation du point rouge
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -143,7 +161,7 @@ const TabIcon = ({ name, nameOutline, focused, color, unreadCount = 0 }) => {
         color={color}
       />
 
-      {/* Badge nombre non lus (affichage prioritaire) */}
+      {/* Badge nombre non lus */}
       {unreadCount > 0 && (
         <Animated.View
           style={[
@@ -165,15 +183,20 @@ const TabIcon = ({ name, nameOutline, focused, color, unreadCount = 0 }) => {
 // ─────────────────────────────────────────────────────────────
 const MainTabs = () => {
 
-  // Nombre de messages non lus — partagé entre onglet et badge
+  // ✅ CORRECTION 2 : récupérer les insets de la safe area
+  // insets.bottom = hauteur de la barre de navigation du téléphone
+  // (0 sur les vieux Androids, ~34px sur iPhone récent, variable)
+  const insets = useSafeAreaInsets();
+
+  // Nombre de messages non lus
   const [unreadCount, setUnreadCount] = useState(0);
   const intervalRef = useRef(null);
 
-  // ── Polling du nombre de non lus toutes les 30 secondes ──
+  // Polling du nombre de non lus toutes les 30 secondes
   useEffect(() => {
-    fetchUnreadCount();                      // premier appel immédiat
+    fetchUnreadCount();
     intervalRef.current = setInterval(fetchUnreadCount, 30000);
-    return () => clearInterval(intervalRef.current); // nettoyage
+    return () => clearInterval(intervalRef.current);
   }, []);
 
   const fetchUnreadCount = async () => {
@@ -181,12 +204,10 @@ const MainTabs = () => {
       const res = await getUnreadCount();
       setUnreadCount(res.data.unread_count ?? 0);
     } catch {
-      // Silencieux : ne pas bloquer l'app si l'endpoint est absent
+      // Silencieux si l'endpoint n'est pas encore disponible
     }
   };
 
-  // Appelé depuis MessagerieScreen / MessageDetailScreen via
-  // navigation.getParent() pour réinitialiser le badge
   const resetUnreadCount = () => setUnreadCount(0);
 
   return (
@@ -204,8 +225,11 @@ const MainTabs = () => {
           shadowRadius:     12,
           // Ombre Android
           elevation:        12,
-          height:           65,
-          paddingBottom:    10,
+          // ✅ CORRECTION 2 : hauteur dynamique selon l'appareil
+          // On ajoute l'inset bas (safe area) au paddingBottom
+          // pour que la barre ne soit jamais cachée par le système
+          height:           60 + insets.bottom,
+          paddingBottom:    8 + insets.bottom,
           paddingTop:       6,
         },
         tabBarActiveTintColor:   COLORS.primary,
@@ -262,18 +286,23 @@ const MainTabs = () => {
               name="chatbubble-ellipses"
               nameOutline="chatbubble-ellipses-outline"
               focused={focused}
-              color={unreadCount > 0 ? '#ef4444' : color} // rouge si non lus
+              color={unreadCount > 0 ? '#ef4444' : color}
               unreadCount={unreadCount}
             />
           ),
-          // Label rouge si non lus
           tabBarLabelStyle: unreadCount > 0
             ? { fontSize: 11, fontWeight: '700', color: '#ef4444' }
             : { fontSize: 11, fontWeight: '600' },
         }}
       >
-        {/* Passer resetUnreadCount et fetchUnreadCount en props via
-            screenOptions → les écrans peuvent réinitialiser le badge */}
+        {/*
+          ✅ CORRECTION 1 : on passe resetUnreadCount et
+          fetchUnreadCount en props à MessagerieStack.
+          MessagerieStack les transmet en initialParams aux
+          écrans enfants (MessagerieScreen, MessageDetailScreen).
+          Les écrans récupèrent ces fonctions avec :
+            const { resetUnreadCount } = route.params;
+        */}
         {(props) => (
           <MessagerieStack
             {...props}
@@ -334,7 +363,6 @@ const AppNavigator = () => {
 // ─────────────────────────────────────────────────────────────
 const tabStyles = StyleSheet.create({
 
-  // Conteneur de l'icône (relatif pour le badge)
   iconContainer: {
     width:          32,
     height:         32,
@@ -343,16 +371,14 @@ const tabStyles = StyleSheet.create({
     position:       'relative',
   },
 
-  // Fond pill bleu transparent derrière l'icône active
   activePill: {
     position:        'absolute',
     width:           40,
     height:          32,
     borderRadius:    16,
-    backgroundColor: COLORS.primary + '18', // 10% opacité
+    backgroundColor: COLORS.primary + '18',
   },
 
-  // Badge rouge — affiché en haut à droite de l'icône
   badge: {
     position:          'absolute',
     top:               -5,
@@ -364,7 +390,6 @@ const tabStyles = StyleSheet.create({
     paddingHorizontal: 4,
     justifyContent:    'center',
     alignItems:        'center',
-    // Bordure blanche pour se détacher de la tab bar
     borderWidth:       2,
     borderColor:       '#ffffff',
   },
