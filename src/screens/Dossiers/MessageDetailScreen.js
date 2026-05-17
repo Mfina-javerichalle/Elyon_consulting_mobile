@@ -3,26 +3,28 @@
 //
 // Écran de conversation avec le conseiller Elyon Consulting
 //
-// NOUVEAUTÉS :
+// CORRECTION APPORTÉE :
 //
-//   1. FUSEAU HORAIRE LOCAL
-//      Les dates UTC reçues de l'API sont converties
-//      automatiquement dans le fuseau horaire du téléphone.
-//      Utilise Intl.DateTimeFormat avec le timezone local.
-//      Ex: "2026-05-16T12:00:00Z" → "14:00" en France,
-//          "08:00" à New York.
+//   BADGE NON LUS — CORRIGÉ
+//   Problème : navigation.getParent('TabMessagerie') ne
+//   retournait pas un objet avec fetchUnreadCount car
+//   React Navigation n'expose pas les fonctions custom
+//   via getParent().
 //
-//   2. MARK AS READ
-//      À l'ouverture de la conversation, tous les messages
-//      sont marqués comme lus via markMessagesAsRead().
-//      Le badge de l'onglet Messages est ainsi réinitialisé.
+//   Solution : fetchUnreadCount est récupérée depuis
+//   route.params (passée depuis MessagerieStack via
+//   initialParams dans AppNavigator).
 //
-//   3. ICÔNES IONICONS — plus d'emojis dans l'UI
+//   Avant (cassé) :
+//     const parent = navigation.getParent('TabMessagerie');
+//     if (parent?.fetchUnreadCount) parent.fetchUnreadCount();
 //
-//   4. POLLING — rafraîchissement automatique toutes les 30s
+//   Après (corrigé) :
+//     const { fetchUnreadCount } = route.params ?? {};
+//     if (typeof fetchUnreadCount === 'function') fetchUnreadCount();
 // ============================================================
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TextInput,
   TouchableOpacity, ActivityIndicator,
@@ -38,76 +40,43 @@ import { COLORS } from '../../utils/constants';
 // Utilitaires de formatage des dates en heure locale
 // ─────────────────────────────────────────────────────────────
 
-// Fuseau horaire du téléphone de l'utilisateur
-// Ex : "Europe/Paris", "America/New_York", "Africa/Brazzaville"
 const USER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-/**
- * Formate une date ISO UTC en heure locale (HH:MM)
- * @param {string} dateStr  — "2026-05-16T12:00:00Z" ou "2026-05-16 12:00:00"
- * @returns {string}         — "14:00" (si timezone Europe/Paris)
- */
 const formatTime = (dateStr) => {
   if (!dateStr) return '';
   try {
-    // Normaliser : remplacer l'espace par "T" si besoin
     const normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T');
-    // Ajouter "Z" si pas de timezone explicite (API Laravel renvoie souvent sans)
     const withZ = normalized.endsWith('Z') || normalized.includes('+')
-      ? normalized
-      : normalized + 'Z';
-
+      ? normalized : normalized + 'Z';
     return new Intl.DateTimeFormat('fr-FR', {
-      hour:     '2-digit',
-      minute:   '2-digit',
-      timeZone: USER_TIMEZONE,
+      hour: '2-digit', minute: '2-digit', timeZone: USER_TIMEZONE,
     }).format(new Date(withZ));
   } catch {
-    // Fallback : afficher tel quel si parsing échoue
     return dateStr.split(' ')[1]?.slice(0, 5) || dateStr;
   }
 };
 
-/**
- * Formate une date ISO UTC en date lisible locale (DD/MM/YYYY)
- * @param {string} dateStr
- * @returns {string} — "16/05/2026"
- */
 const formatDate = (dateStr) => {
   if (!dateStr) return '';
   try {
     const normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T');
     const withZ = normalized.endsWith('Z') || normalized.includes('+')
-      ? normalized
-      : normalized + 'Z';
-
+      ? normalized : normalized + 'Z';
     return new Intl.DateTimeFormat('fr-FR', {
-      day:      '2-digit',
-      month:    '2-digit',
-      year:     'numeric',
-      timeZone: USER_TIMEZONE,
+      day: '2-digit', month: '2-digit', year: 'numeric', timeZone: USER_TIMEZONE,
     }).format(new Date(withZ));
   } catch {
     return dateStr.split(' ')[0] || dateStr;
   }
 };
 
-/**
- * Retourne la date locale (YYYY-MM-DD) pour comparer les jours
- * et afficher les séparateurs de date.
- */
 const getLocalDateKey = (dateStr) => {
   if (!dateStr) return '';
   try {
     const normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T');
     const withZ = normalized.endsWith('Z') || normalized.includes('+')
-      ? normalized
-      : normalized + 'Z';
-    const d = new Date(withZ);
-    // Format YYYY-MM-DD dans le timezone local
-    return new Intl.DateTimeFormat('fr-CA', { // fr-CA = YYYY-MM-DD
-      timeZone: USER_TIMEZONE,
-    }).format(d);
+      ? normalized : normalized + 'Z';
+    return new Intl.DateTimeFormat('fr-CA', { timeZone: USER_TIMEZONE }).format(new Date(withZ));
   } catch {
     return dateStr.split(' ')[0] || dateStr;
   }
@@ -118,6 +87,11 @@ const getLocalDateKey = (dateStr) => {
 const MessageDetailScreen = ({ route, navigation }) => {
 
   const { dossierId, dossierNom } = route.params;
+
+  // ✅ CORRECTION : récupérer fetchUnreadCount depuis route.params
+  // Transmis par MessagerieStack via initialParams dans AppNavigator
+  const { fetchUnreadCount } = route.params ?? {};
+
   const { user } = useAuth();
 
   const [messages, setMessages] = useState([]);
@@ -128,34 +102,32 @@ const MessageDetailScreen = ({ route, navigation }) => {
   const flatListRef = useRef(null);
   const intervalRef = useRef(null);
 
-  // ── Marquer comme lus + charger dès l'ouverture ─────────
   useFocusEffect(
     useCallback(() => {
-      loadMessages(true); // true = marquer comme lus
+      loadMessages(true);
       intervalRef.current = setInterval(() => loadMessages(false), 30000);
       return () => clearInterval(intervalRef.current);
     }, [dossierId])
   );
 
-  /**
-   * Charge les messages du dossier.
-   * @param {boolean} markRead — si true, marque les messages comme lus
-   *                             et réinitialise le badge de l'onglet.
-   */
   const loadMessages = async (markRead = false) => {
     try {
       const res = await getMessages(dossierId);
       setMessages(res.data.messages);
 
-      // Marquer comme lus si demandé (à l'ouverture de l'écran)
       if (markRead) {
         try {
           await markMessagesAsRead(dossierId);
-          // Notifier AppNavigator de rafraîchir le badge
-          const parent = navigation.getParent('TabMessagerie');
-          if (parent?.fetchUnreadCount) parent.fetchUnreadCount();
+          // ✅ CORRECTION : appel direct depuis route.params
+          // Avant : navigation.getParent('TabMessagerie')?.fetchUnreadCount()
+          //         → ne fonctionnait pas
+          // Après : fetchUnreadCount?.()
+          //         → fonctionne car c'est la vraie fonction passée en param
+          if (typeof fetchUnreadCount === 'function') {
+            fetchUnreadCount();
+          }
         } catch {
-          // Non bloquant : le badge sera corrigé au prochain polling
+          // Non bloquant — le badge sera corrigé au prochain polling (30s)
         }
       }
     } catch (err) {
@@ -165,7 +137,6 @@ const MessageDetailScreen = ({ route, navigation }) => {
     }
   };
 
-  // ── Envoyer un message ───────────────────────────────────
   const handleSend = async () => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -176,36 +147,29 @@ const MessageDetailScreen = ({ route, navigation }) => {
     try {
       await sendMessage(dossierId, trimmed);
       await loadMessages(false);
-      // Scroll vers le bas après envoi
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 200);
     } catch (err) {
       console.log('Erreur envoi:', err.response?.data);
-      setText(trimmed); // Restaurer si erreur
+      setText(trimmed);
     } finally {
       setSending(false);
     }
   };
 
-  // ── Rendu d'un message ───────────────────────────────────
   const renderMessage = ({ item, index }) => {
     const isMe = item.is_mine;
-
-    // Afficher un séparateur de date quand le jour change
     const currentDateKey  = getLocalDateKey(item.created_at);
     const previousDateKey = index > 0
       ? getLocalDateKey(messages[index - 1].created_at)
       : null;
     const showDate = index === 0 || currentDateKey !== previousDateKey;
-
-    // Heure locale formatée (utilise Intl avec timezone du téléphone)
     const timeFormatted = formatTime(item.created_at);
     const dateFormatted = formatDate(item.created_at);
 
     return (
       <View>
-        {/* Séparateur de date — ex: "16/05/2026" */}
         {showDate && (
           <View style={styles.dateSeparator}>
             <Text style={styles.dateSeparatorText}>{dateFormatted}</Text>
@@ -213,34 +177,24 @@ const MessageDetailScreen = ({ route, navigation }) => {
         )}
 
         <View style={[styles.messageRow, isMe ? styles.rowRight : styles.rowLeft]}>
-
-          {/* Avatar conseiller */}
           {!isMe && (
             <View style={styles.adminAvatar}>
               <Text style={styles.adminAvatarText}>EC</Text>
             </View>
           )}
 
-          {/* Bulle de message */}
           <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
-
-            {/* Nom expéditeur (côté conseiller) */}
             {!isMe && (
               <Text style={styles.senderName}>
                 {item.sender?.name || 'Elyon Consulting'}
               </Text>
             )}
-
-            {/* Contenu du message */}
             <Text style={[styles.messageText, isMe && styles.messageTextMe]}>
               {item.contenu}
             </Text>
-
-            {/* Heure locale — ex: "14:00" */}
             <Text style={[styles.messageTime, isMe && styles.messageTimeMe]}>
               {timeFormatted}
             </Text>
-
           </View>
         </View>
       </View>
@@ -328,14 +282,10 @@ const MessageDetailScreen = ({ route, navigation }) => {
   );
 };
 
-// ─────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFF' },
   centered:  { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  // En-tête
   chatHeader: {
     backgroundColor: COLORS.primary,
     paddingHorizontal: 16, paddingVertical: 12,
@@ -352,7 +302,6 @@ const styles = StyleSheet.create({
   onlineDot:    { width: 7, height: 7, borderRadius: 4, backgroundColor: '#4ade80' },
   chatSubtitle: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },
 
-  // Messages
   messageList: { padding: 16, paddingBottom: 8 },
   messageRow:  { marginBottom: 12, flexDirection: 'row', alignItems: 'flex-end' },
   rowLeft:     { justifyContent: 'flex-start' },
@@ -366,21 +315,14 @@ const styles = StyleSheet.create({
   },
   adminAvatarText: { color: COLORS.white, fontWeight: '800', fontSize: 11 },
 
-  bubble: {
-    maxWidth: '75%', borderRadius: 18, padding: 12, paddingBottom: 8,
-  },
+  bubble: { maxWidth: '75%', borderRadius: 18, padding: 12, paddingBottom: 8 },
   bubbleMe: {
-    backgroundColor:         COLORS.primary,
-    borderBottomRightRadius: 4,
+    backgroundColor: COLORS.primary, borderBottomRightRadius: 4,
   },
   bubbleOther: {
-    backgroundColor:        COLORS.white,
-    borderBottomLeftRadius: 4,
-    shadowColor:            '#000',
-    shadowOffset:           { width: 0, height: 1 },
-    shadowOpacity:          0.08,
-    shadowRadius:           3,
-    elevation:              2,
+    backgroundColor: COLORS.white, borderBottomLeftRadius: 4,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08, shadowRadius: 3, elevation: 2,
   },
 
   senderName:    { fontSize: 11, fontWeight: '700', color: COLORS.primary, marginBottom: 4 },
@@ -389,7 +331,6 @@ const styles = StyleSheet.create({
   messageTime:   { fontSize: 10, color: COLORS.gray, marginTop: 4, alignSelf: 'flex-end' },
   messageTimeMe: { color: 'rgba(255,255,255,0.6)' },
 
-  // Séparateur de date
   dateSeparator: { alignItems: 'center', marginVertical: 12 },
   dateSeparatorText: {
     backgroundColor: COLORS.border || '#e2e8f0',
@@ -397,7 +338,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20,
   },
 
-  // État vide
   empty: { alignItems: 'center', paddingVertical: 60 },
   emptyIconWrap: {
     width: 80, height: 80, borderRadius: 40,
@@ -407,7 +347,6 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.primary, marginBottom: 8 },
   emptyText:  { color: COLORS.gray, textAlign: 'center', lineHeight: 20, paddingHorizontal: 20 },
 
-  // Barre de saisie
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end',
     backgroundColor: COLORS.white,
