@@ -2,25 +2,34 @@
 // src/screens/Dossiers/DossierDetailScreen.js
 //
 // Détail d'un dossier — 2 onglets : Documents | Étapes
-// Icônes : Ionicons (@expo/vector-icons) — plus d'emojis UI
 //
-// Documents :
-//   - Tous les documents requis du service
-//   - Statuts : non_envoye / en_attente / valide / refuse
-//   - Bouton upload (renvoyer si refusé)
+// CORRECTION APPORTÉE :
 //
-// Étapes :
-//   - Progression du traitement
-//   - Statut : en_attente / fait
+//   ÉTAPES NON MISES À JOUR — CORRIGÉ
+//   Problème : useEffect([], []) ne chargeait les données
+//   qu'une seule fois au montage de l'écran. Si l'admin
+//   mettait à jour une étape, le mobile ne le voyait pas
+//   car il n'y avait ni re-fetch au focus, ni pull-to-refresh.
+//
+//   Solution :
+//     1. useFocusEffect → recharge à chaque fois que
+//        l'utilisateur revient sur cet écran (ex: retour
+//        depuis MessageDetail).
+//     2. Pull-to-refresh → l'utilisateur peut tirer vers
+//        le bas pour forcer le rechargement manuellement.
 // ============================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
   TouchableOpacity, ActivityIndicator, Alert,
+  RefreshControl,
 } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+// ✅ CORRECTION : useFocusEffect remplace useEffect
+// Il se déclenche à chaque fois que l'écran reprend le focus
+import { useFocusEffect } from '@react-navigation/native';
 import { getDossier, uploadDocument } from '../../services/api';
 import { COLORS, STATUS_LABELS } from '../../utils/constants';
 
@@ -38,12 +47,24 @@ const DossierDetailScreen = ({ route, navigation }) => {
 
   const [dossier,   setDossier]   = useState(null);
   const [loading,   setLoading]   = useState(true);
-  const [uploading, setUploading] = useState(null); // id du doc en cours d'upload
+  // ✅ CORRECTION 2 : état pour le pull-to-refresh
+  const [refreshing, setRefreshing] = useState(false);
+  const [uploading, setUploading] = useState(null);
   const [activeTab, setActiveTab] = useState('documents');
 
-  useEffect(() => { loadDossier(); }, []);
+  // ✅ CORRECTION 1 : useFocusEffect au lieu de useEffect
+  // → Se déclenche à chaque fois que l'écran redevient visible
+  // → Ainsi si l'admin a mis à jour une étape, le client voit
+  //   les changements dès qu'il revient sur cet écran
+  useFocusEffect(
+    useCallback(() => {
+      loadDossier();
+    }, [dossierId])
+  );
 
-  const loadDossier = async () => {
+  const loadDossier = async (isPullToRefresh = false) => {
+    // Ne pas afficher le spinner si c'est un pull-to-refresh
+    if (!isPullToRefresh) setLoading(true);
     try {
       const res = await getDossier(dossierId);
       setDossier(res.data.dossier);
@@ -54,8 +75,16 @@ const DossierDetailScreen = ({ route, navigation }) => {
       ]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
+
+  // ✅ CORRECTION 2 : Pull-to-refresh
+  // L'utilisateur tire vers le bas pour forcer le rechargement
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadDossier(true);
+  }, [dossierId]);
 
   // ── Upload document via expo-document-picker ─────────────
   const handleUpload = async (documentRequisId) => {
@@ -98,45 +127,56 @@ const DossierDetailScreen = ({ route, navigation }) => {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={COLORS.accent} />
+        <Text style={{ color: COLORS.gray, marginTop: 12 }}>Chargement...</Text>
       </View>
     );
   }
 
   if (!dossier) return null;
 
-  // Nombre de docs validés pour la barre de progression
   const docs       = dossier.documents || [];
   const etapes     = dossier.etapes    || [];
   const validated  = docs.filter(d => d.statut === 'valide').length;
-  const etapesDone = etapes.filter(e => e.statut === 'fait').length;
+  // ✅ CORRECTION : l'admin utilise "validee" (pas "fait")
+  // On accepte les deux valeurs pour compatibilité
+  const etapesDone = etapes.filter(e => e.statut === 'validee' || e.statut === 'fait').length;
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    // ✅ CORRECTION 2 : ScrollView avec RefreshControl
+    // L'utilisateur peut tirer vers le bas pour recharger
+    <ScrollView
+      style={styles.container}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={[COLORS.accent]}
+          tintColor={COLORS.accent}
+        />
+      }
+    >
 
       {/* ── Hero statut dossier ── */}
       <View style={styles.hero}>
         <Text style={styles.heroService}>{dossier.service?.nom}</Text>
 
-        {/* Pays */}
         <View style={styles.heroPaysRow}>
           <Ionicons name="location-outline" size={14} color="rgba(255,255,255,0.7)" />
           <Text style={styles.heroPays}>{dossier.service?.pays}</Text>
         </View>
 
-        {/* Badge statut global */}
         <View style={[styles.badge, { backgroundColor: COLORS.status[dossier.statut] + '33' }]}>
           <Text style={[styles.badgeText, { color: COLORS.status[dossier.statut] }]}>
             {STATUS_LABELS[dossier.statut] || dossier.statut}
           </Text>
         </View>
 
-        {/* Date de création */}
         <View style={styles.heroDateRow}>
           <Ionicons name="calendar-outline" size={12} color="rgba(255,255,255,0.6)" />
           <Text style={styles.heroDate}>Créé le {dossier.created_at}</Text>
         </View>
 
-        {/* Mini stats */}
         <View style={styles.heroStats}>
           <View style={styles.heroStatItem}>
             <Text style={styles.heroStatNum}>{validated}/{docs.length}</Text>
@@ -185,7 +225,6 @@ const DossierDetailScreen = ({ route, navigation }) => {
           {docs.length > 0 ? docs.map((doc) => (
             <View key={doc.id} style={styles.docCard}>
 
-              {/* En-tête : nom + badge obligatoire */}
               <View style={styles.docHeader}>
                 <Text style={styles.docName}>{doc.nom}</Text>
                 <View style={doc.obligatoire ? styles.obligBadge : styles.optBadge}>
@@ -195,10 +234,8 @@ const DossierDetailScreen = ({ route, navigation }) => {
                 </View>
               </View>
 
-              {/* Badge statut */}
               <DocBadge statut={doc.statut} />
 
-              {/* Commentaire de refus */}
               {doc.statut === 'refuse' && doc.commentaire ? (
                 <View style={styles.refusBox}>
                   <Ionicons name="information-circle-outline" size={14} color="#856404" />
@@ -206,7 +243,6 @@ const DossierDetailScreen = ({ route, navigation }) => {
                 </View>
               ) : null}
 
-              {/* Bouton upload (masqué si validé) */}
               {doc.statut !== 'valide' && (
                 <TouchableOpacity
                   style={[styles.uploadBtn, uploading === doc.id && styles.uploadBtnDisabled]}
@@ -229,7 +265,6 @@ const DossierDetailScreen = ({ route, navigation }) => {
                 </TouchableOpacity>
               )}
 
-              {/* Confirmation si validé */}
               {doc.statut === 'valide' && (
                 <View style={styles.valideRow}>
                   <Ionicons name="checkmark-circle" size={15} color="#27ae60" />
@@ -251,19 +286,26 @@ const DossierDetailScreen = ({ route, navigation }) => {
             etapes
               .sort((a, b) => a.ordre - b.ordre)
               .map((etape, index) => {
-                const fait = etape.statut === 'fait';
+                // ✅ CORRECTION : l'admin utilise "validee" (sans accent)
+                // "en_cours" s'affiche comme en progression (cercle bleu)
+                const fait = etape.statut === 'validee' || etape.statut === 'fait';
+                const enCours = etape.statut === 'en_cours';
                 return (
                   <View key={etape.id} style={styles.etapeRow}>
-                    {/* Cercle numéroté ou check */}
-                    <View style={[styles.etapeCircle, fait && styles.etapeCircleDone]}>
+                    <View style={[
+                      styles.etapeCircle,
+                      fait && styles.etapeCircleDone,
+                      enCours && styles.etapeCircleEnCours,
+                    ]}>
                       {fait ? (
                         <Ionicons name="checkmark" size={16} color={COLORS.white} />
+                      ) : enCours ? (
+                        <Ionicons name="time" size={16} color={COLORS.white} />
                       ) : (
                         <Text style={styles.etapeNum}>{index + 1}</Text>
                       )}
                     </View>
 
-                    {/* Ligne verticale entre étapes */}
                     {index < etapes.length - 1 && (
                       <View style={[styles.etapeLine, fait && styles.etapeLineDone]} />
                     )}
@@ -274,12 +316,14 @@ const DossierDetailScreen = ({ route, navigation }) => {
                       </Text>
                       <View style={styles.etapeStatusRow}>
                         <Ionicons
-                          name={fait ? 'checkmark-circle-outline' : 'time-outline'}
+                          name={fait ? 'checkmark-circle-outline' : enCours ? 'time-outline' : 'time-outline'}
                           size={12}
-                          color={fait ? '#27ae60' : COLORS.gray}
+                          color={fait ? '#27ae60' : enCours ? '#f59e0b' : COLORS.gray}
                         />
-                        <Text style={[styles.etapeStatus, { color: fait ? '#27ae60' : COLORS.gray }]}>
-                          {fait ? 'Complété' : 'En attente'}
+                        <Text style={[styles.etapeStatus, {
+                          color: fait ? '#27ae60' : enCours ? '#f59e0b' : COLORS.gray
+                        }]}>
+                          {fait ? 'Complété' : enCours ? 'En cours' : 'En attente'}
                         </Text>
                       </View>
                     </View>
@@ -300,10 +344,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.lightGray },
   centered:  { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  // ── Hero ─────────────────────────────────────────────────
-  hero: {
-    backgroundColor: COLORS.primary, padding: 24, alignItems: 'center',
-  },
+  hero: { backgroundColor: COLORS.primary, padding: 24, alignItems: 'center' },
   heroService: {
     fontSize: 20, fontWeight: '700', color: COLORS.white,
     textAlign: 'center', marginBottom: 8,
@@ -315,19 +356,16 @@ const styles = StyleSheet.create({
   heroDateRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8, marginBottom: 16 },
   heroDate:    { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
 
-  // Mini stats dans le hero
   heroStats: {
     flexDirection: 'row',
     backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 12, paddingVertical: 12, paddingHorizontal: 24,
-    gap: 24,
+    borderRadius: 12, paddingVertical: 12, paddingHorizontal: 24, gap: 24,
   },
   heroStatItem:    { alignItems: 'center' },
   heroStatNum:     { fontSize: 18, fontWeight: '800', color: '#fff' },
   heroStatLabel:   { fontSize: 11, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
   heroStatDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
 
-  // ── Onglets ───────────────────────────────────────────────
   tabs: {
     flexDirection: 'row', backgroundColor: COLORS.white,
     borderBottomWidth: 1, borderBottomColor: COLORS.border || '#e2e8f0',
@@ -343,7 +381,6 @@ const styles = StyleSheet.create({
   section:   { padding: 16 },
   emptyText: { color: COLORS.gray, textAlign: 'center', marginTop: 20, fontSize: 14 },
 
-  // ── Carte document ────────────────────────────────────────
   docCard: {
     backgroundColor: COLORS.white, borderRadius: 14, padding: 16,
     marginBottom: 12, elevation: 2,
@@ -361,7 +398,6 @@ const styles = StyleSheet.create({
   optBadge:   { backgroundColor: COLORS.lightGray || '#f8fafc', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
   optText:    { fontSize: 11, color: COLORS.gray },
 
-  // Badge statut document
   docBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     alignSelf: 'flex-start', borderRadius: 10,
@@ -369,7 +405,6 @@ const styles = StyleSheet.create({
   },
   docBadgeText: { fontSize: 12, fontWeight: '600' },
 
-  // Box refus
   refusBox: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 6,
     backgroundColor: '#fff8e1', borderRadius: 8, padding: 10,
@@ -377,7 +412,6 @@ const styles = StyleSheet.create({
   },
   refusText: { fontSize: 13, color: '#856404', flex: 1 },
 
-  // Bouton upload
   uploadBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     backgroundColor: COLORS.accent, borderRadius: 10,
@@ -386,11 +420,9 @@ const styles = StyleSheet.create({
   uploadBtnDisabled: { opacity: 0.6 },
   uploadBtnText:     { color: COLORS.white, fontWeight: '700', fontSize: 14 },
 
-  // Validation
   valideRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   valideText: { color: '#27ae60', fontSize: 13, fontWeight: '600' },
 
-  // ── Étapes ───────────────────────────────────────────────
   etapeRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 20, position: 'relative' },
   etapeCircle: {
     width: 36, height: 36, borderRadius: 18,
@@ -398,10 +430,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     marginRight: 14, zIndex: 1,
   },
-  etapeCircleDone: { backgroundColor: '#27ae60' },
+  etapeCircleDone:    { backgroundColor: '#27ae60' },
+  etapeCircleEnCours: { backgroundColor: '#f59e0b' },
   etapeNum:        { color: COLORS.white, fontWeight: '700', fontSize: 14 },
 
-  // Ligne verticale entre étapes
   etapeLine: {
     position: 'absolute', left: 17, top: 36,
     width: 2, height: 24,
@@ -409,11 +441,11 @@ const styles = StyleSheet.create({
   },
   etapeLineDone: { backgroundColor: '#27ae60' },
 
-  etapeContent:    { flex: 1, paddingTop: 6 },
-  etapeName:       { fontSize: 15, fontWeight: '600', color: COLORS.darkGray, marginBottom: 4 },
-  etapeNameDone:   { color: '#27ae60' },
-  etapeStatusRow:  { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  etapeStatus:     { fontSize: 12 },
+  etapeContent:   { flex: 1, paddingTop: 6 },
+  etapeName:      { fontSize: 15, fontWeight: '600', color: COLORS.darkGray, marginBottom: 4 },
+  etapeNameDone:  { color: '#27ae60' },
+  etapeStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  etapeStatus:    { fontSize: 12 },
 });
 
 export default DossierDetailScreen;
